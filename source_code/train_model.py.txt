@@ -1,0 +1,102 @@
+import json
+import pickle
+import random
+import numpy as np
+import nltk
+from nltk.stem import WordNetLemmatizer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+
+# Initialize the WordNet Lemmatizer
+lemmatizer = WordNetLemmatizer()
+
+# Load intents from JSON file
+intents = json.loads(open('/content/intents.json').read())
+
+# Initialize lists and variables
+words = []
+classes = []
+documents = []
+ignore_letters = ['?', '!', ',', '.']
+
+# Process intents and patterns
+for intent in intents['intents']:
+    for pattern in intent['patterns']:
+        word_list = nltk.word_tokenize(pattern)
+        words.extend(word_list)
+        documents.append((word_list, intent['tag']))
+        if intent['tag'] not in classes:
+            classes.append(intent['tag'])
+
+# Lemmatize and normalize words
+words = [lemmatizer.lemmatize(word.lower()) for word in words if word not in ignore_letters]
+words = sorted(set(words))
+classes = sorted(set(classes))
+
+# Save words and classes using pickle
+pickle.dump(words, open('/content/words.pkl', 'wb'))
+pickle.dump(classes, open('/content/classes.pkl', 'wb'))
+
+# Initialize training data
+training = []
+output_empty = [0] * len(classes)
+
+# Create bag of words and output rows for each document
+for document in documents:
+    bag = []
+    word_patterns = document[0]
+    word_patterns = [lemmatizer.lemmatize(word.lower()) for word in word_patterns]
+
+    for word in words:
+        bag.append(1) if word in word_patterns else bag.append(0)
+
+    output_row = list(output_empty)
+    output_row[classes.index(document[1])] = 1
+    training.append([bag, output_row])
+
+# Shuffle training data if needed
+# random.shuffle(training)
+
+# Convert training data to numpy arrays
+X = np.array([sample[0] for sample in training])  # Features
+y = np.array([sample[1] for sample in training])  # Labels
+
+# Split data into training and test sets (80-20 split)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Scale input features using StandardScaler
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Define the neural network model
+model = Sequential([
+    Dense(128, input_shape=(len(X_train[0]),), activation='relu'),
+    Dropout(0.5),
+    Dense(64, activation='relu'),
+    Dropout(0.5),
+    Dense(len(y_train[0]), activation='softmax')
+])
+
+# Compile the model with Adam optimizer and reduced learning rate
+optimizer = Adam(learning_rate=0.001)
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.0001)
+model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train the model
+history = model.fit(X_train_scaled, y_train, epochs=200, batch_size=8, validation_data=(X_test_scaled, y_test))
+
+# Save the trained model
+model.save('/content/chatbot_model.h5')
+
+# Print model summary
+print(model.summary())
+
+# Evaluate the model on test data
+loss, accuracy = model.evaluate(X_test_scaled, y_test)
+print(f"Test Loss: {loss:.4f}")
+print(f"Test Accuracy: {accuracy:.4f}")
